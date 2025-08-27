@@ -102,6 +102,30 @@ else
     exit 1
 fi
 
+# Gemini 스타일가이드 복사 (한국어 리뷰 설정)
+GEMINI_DIR="$PROJECT_PATH/.gemini"
+mkdir -p "$GEMINI_DIR"
+
+case $PROJECT_TYPE in
+    swift)
+        STYLEGUIDE_FILE="$REPO_ROOT/templates/gemini-styleguides/korean-swift-styleguide.md"
+        ;;
+    js)
+        STYLEGUIDE_FILE="$REPO_ROOT/templates/gemini-styleguides/korean-javascript-styleguide.md"
+        ;;
+    python)
+        STYLEGUIDE_FILE="$REPO_ROOT/templates/gemini-styleguides/korean-python-styleguide.md"
+        ;;
+    *)
+        STYLEGUIDE_FILE=""
+        ;;
+esac
+
+if [ -f "$STYLEGUIDE_FILE" ]; then
+    cp "$STYLEGUIDE_FILE" "$GEMINI_DIR/styleguide.md"
+    echo "✅ Gemini 한국어 스타일가이드가 생성되었습니다: $GEMINI_DIR/styleguide.md"
+fi
+
 # README 파일 생성
 cat > "$PROJECT_PATH/AI-CODE-REVIEW-SETUP.md" << EOF
 # AI Code Review 설정 완료
