@@ -1,0 +1,86 @@
+name: AI Code Review with Claude Sonnet
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Get PR diff
+        id: diff
+        run: |
+          # PR의 변경사항 가져오기
+          git diff origin/${{ github.base_ref }}...HEAD > pr_diff.txt
+          
+          # 파일 크기 확인 (너무 큰 diff는 처리 제한)
+          DIFF_SIZE=$(stat -c%s pr_diff.txt 2>/dev/null || stat -f%z pr_diff.txt)
+          if [ "$DIFF_SIZE" -gt 100000 ]; then
+            echo "PR diff is too large for review (>100KB)" > pr_diff.txt
+          fi
+          
+      - name: AI Code Review with Claude Sonnet
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          # Claude API를 사용한 코드 리뷰
+          PR_DIFF=$(cat pr_diff.txt | head -c 50000)  # 최대 50KB로 제한
+          
+          # API 요청 준비
+          REQUEST_BODY=$(jq -n \
+            --arg diff "$PR_DIFF" \
+            '{
+              "model": "claude-3-5-sonnet-20241022",
+              "max_tokens": 4096,
+              "messages": [{
+                "role": "user",
+                "content": "Please review the following PR code changes and provide feedback on:\n1. Potential bugs or issues\n2. Performance concerns\n3. Security vulnerabilities\n4. Code quality and best practices\n5. Test coverage requirements\n\nProvide specific code examples for improvements when applicable.\n\nPR Diff:\n\n\($diff)"
+              }]
+            }')
+          
+          # Claude API 호출
+          REVIEW_RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" https://api.anthropic.com/v1/messages \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d "$REQUEST_BODY")
+          
+          # HTTP 상태 코드 확인
+          HTTP_STATUS=$(echo "$REVIEW_RESPONSE" | grep "HTTP_STATUS" | cut -d: -f2)
+          RESPONSE_BODY=$(echo "$REVIEW_RESPONSE" | sed '/HTTP_STATUS/d')
+          
+          if [ "$HTTP_STATUS" -ne 200 ]; then
+            echo "API call failed (Status: $HTTP_STATUS)" > review_comment.txt
+            echo "$RESPONSE_BODY" >> review_comment.txt
+          else
+            # 리뷰 결과 추출
+            REVIEW_CONTENT=$(echo "$RESPONSE_BODY" | jq -r '.content[0].text // "Unable to generate review"')
+            echo "$REVIEW_CONTENT" > review_comment.txt
+          fi
+          
+      - name: Post review comment
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const reviewContent = fs.readFileSync('review_comment.txt', 'utf8');
+            
+            // PR에 코멘트 작성
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `## 🤖 AI Code Review by Claude 3.5 Sonnet\n\n${reviewContent}\n\n---\n*Powered by Claude 3.5 Sonnet - Fast and cost-effective code analysis*`
+            });
